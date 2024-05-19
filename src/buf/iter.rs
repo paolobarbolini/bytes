@@ -108,11 +108,7 @@ impl<T: Buf> Iterator for IntoIter<T> {
     type Item = u8;
 
     fn next(&mut self) -> Option<u8> {
-        if !self.inner.has_remaining() {
-            return None;
-        }
-
-        let b = self.inner.chunk()[0];
+        let b = *self.inner.chunk().get(0)?;
         self.inner.advance(1);
 
         Some(b)
@@ -122,6 +118,44 @@ impl<T: Buf> Iterator for IntoIter<T> {
         let rem = self.inner.remaining();
         (rem, Some(rem))
     }
+
+    fn count(self) -> usize
+    where
+        Self: Sized,
+    {
+        self.inner.remaining()
+    }
+
+    fn fold<B, F>(mut self, init: B, mut f: F) -> B
+    where
+        Self: Sized,
+        F: FnMut(B, Self::Item) -> B,
+    {
+        let mut accum = init;
+        loop {
+            let chunk = self.inner.chunk();
+            if chunk.is_empty() {
+                break;
+            }
+
+            accum = chunk.iter().copied().fold(accum, &mut f);
+            self.inner.advance(chunk.len());
+        }
+
+        accum
+    }
+
+    fn last(mut self) -> Option<Self::Item>
+    where
+        Self: Sized,
+    {
+        self.inner.advance(self.inner.remaining().checked_sub(1)?);
+        Some(self.inner.chunk()[0])
+    }
 }
 
-impl<T: Buf> ExactSizeIterator for IntoIter<T> {}
+impl<T: Buf> ExactSizeIterator for IntoIter<T> {
+    fn len(&self) -> usize {
+        self.inner.remaining()
+    }
+}
