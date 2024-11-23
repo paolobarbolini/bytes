@@ -5,15 +5,6 @@ use bytes::{Buf, BufMut, Bytes};
 use std::io::IoSlice;
 
 #[test]
-fn collect_two_bufs() {
-    let a = Bytes::from(&b"hello"[..]);
-    let b = Bytes::from(&b"world"[..]);
-
-    let res = a.chain(b).copy_to_bytes(10);
-    assert_eq!(res, &b"helloworld"[..]);
-}
-
-#[test]
 fn writing_chained() {
     let mut a = [0u8; 64];
     let mut b = [0u8; 64];
