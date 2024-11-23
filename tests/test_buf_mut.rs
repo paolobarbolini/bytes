@@ -1,10 +1,132 @@
 #![warn(rust_2018_idioms)]
 
-use bytes::buf::UninitSlice;
-use bytes::{BufMut, BytesMut};
+use bytes::buf::{Chain, UninitSlice};
+use bytes::{Buf, BufMut, BytesMut};
 use core::fmt::Write;
 use core::mem::MaybeUninit;
 use core::usize;
+use std::borrow::Cow;
+
+const BIG_INPUT: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+trait MakeInput: BufMut {
+    const MAX_CAPACITY: usize;
+
+    fn empty() -> Self;
+
+    fn contents(&self) -> Cow<'_, [u8]>;
+}
+
+impl MakeInput for BytesMut {
+    const MAX_CAPACITY: usize = usize::MAX;
+
+    fn empty() -> Self {
+        Self::new()
+    }
+
+    fn contents(&self) -> Cow<'_, [u8]> {
+        Cow::Borrowed(&self[..])
+    }
+}
+
+impl MakeInput for Vec<u8> {
+    const MAX_CAPACITY: usize = isize::MAX as usize;
+
+    fn empty() -> Self {
+        Vec::new()
+    }
+
+    fn contents(&self) -> Cow<'_, [u8]> {
+        Cow::Borrowed(&self[..])
+    }
+}
+
+impl<A: MakeInput, B: MakeInput> MakeInput for Chain<A, B> {
+    const MAX_CAPACITY: usize = A::MAX_CAPACITY.saturating_add(B::MAX_CAPACITY);
+
+    fn empty() -> Self {
+        BufMut::chain_mut(A::empty(), B::empty())
+    }
+
+    fn contents(&self) -> Cow<'_, [u8]> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&self.first_ref().contents());
+        buf.extend_from_slice(&self.last_ref().contents());
+        Cow::Owned(buf)
+    }
+}
+
+macro_rules! buf_tests {
+    ($buf:ty) => {
+        use super::*;
+
+        #[test]
+        fn empty_state() {
+            let mut buf: $buf = MakeInput::empty();
+            assert_eq!(buf.remaining_mut(), <$buf as MakeInput>::MAX_CAPACITY);
+            assert!(buf.has_remaining_mut());
+            assert!(buf.chunk_mut().len() >= 64);
+            assert_eq!(buf.remaining_mut(), <$buf as MakeInput>::MAX_CAPACITY);
+        }
+
+        #[test]
+        fn advance_mut() {
+            let mut buf: $buf = MakeInput::empty();
+            buf.chunk_mut()[..8].copy_from_slice(b"abcdefgh");
+            unsafe { buf.advance_mut(8) }
+            assert_eq!(buf.remaining_mut(), <$buf as MakeInput>::MAX_CAPACITY - 8);
+            assert_eq!(&buf.contents()[..], b"abcdefgh");
+        }
+
+        #[test]
+        fn put() {
+            let mut buf: $buf = MakeInput::empty();
+            buf.put(Buf::chain(&b"abcdefgh"[..], &b"qrstuvwx"[..]));
+            assert_eq!(buf.remaining_mut(), <$buf as MakeInput>::MAX_CAPACITY - 16);
+            assert_eq!(&buf.contents()[..], b"abcdefghqrstuvwx");
+        }
+
+        #[test]
+        fn put_slice() {
+            let mut buf: $buf = MakeInput::empty();
+            buf.put_slice(b"abcdefgh");
+            assert_eq!(buf.remaining_mut(), <$buf as MakeInput>::MAX_CAPACITY - 8);
+            assert_eq!(&buf.contents()[..], b"abcdefgh");
+        }
+
+        #[test]
+        fn put_big_slice() {
+            let mut buf: $buf = MakeInput::empty();
+            buf.put_slice(BIG_INPUT);
+            assert_eq!(buf.remaining_mut(), <$buf as MakeInput>::MAX_CAPACITY - 128);
+            assert_eq!(&buf.contents()[..], BIG_INPUT);
+        }
+
+        #[test]
+        fn put_bytes() {
+            let mut buf: $buf = MakeInput::empty();
+            buf.put_bytes(123, 8);
+            assert_eq!(buf.remaining_mut(), <$buf as MakeInput>::MAX_CAPACITY - 8);
+            assert_eq!(&buf.contents()[..], &[123u8; 8][..]);
+        }
+
+        #[test]
+        fn put_big_bytes() {
+            let mut buf: $buf = MakeInput::empty();
+            buf.put_bytes(123, 128);
+            assert_eq!(buf.remaining_mut(), <$buf as MakeInput>::MAX_CAPACITY - 128);
+            assert_eq!(&buf.contents()[..], &[123u8; 128][..]);
+        }
+    };
+}
+
+mod bytes_mut {
+    buf_tests!(BytesMut);
+}
+
+mod vec {
+    buf_tests!(Vec<u8>);
+}
 
 #[test]
 fn test_vec_as_mut_buf() {
